@@ -1,0 +1,73 @@
+from pathlib import Path
+
+import pytest
+
+from replaykit.recording.loader import RecordingValidationError, load_flow
+
+
+def write_recording(tmp_path: Path, contents: str) -> Path:
+    path = tmp_path / "flow.yaml"
+    path.write_text(contents)
+    return path
+
+
+VALID_FLOW = """
+flow: login
+version: 1
+inputs:
+  username: {type: string, secret: true}
+  password: {type: string, secret: true}
+states:
+  login_page: {url: /login\\.htm, aria: '- heading "Customer Login"'}
+  accounts_overview: {url: /overview\\.htm, aria: '- heading "Accounts Overview"'}
+steps:
+  - from: login_page
+    action: fill
+    target: [{css: 'input[name=username]'}]
+    value: '{{inputs.username}}'
+  - from: login_page
+    action: click
+    target: [{role: button, name: 'Log In'}]
+    to: accounts_overview
+recovery: []
+"""
+
+
+def test_load_flow_builds_typed_recording(tmp_path):
+    flow = load_flow(write_recording(tmp_path, VALID_FLOW))
+
+    assert flow.name == "login"
+    assert flow.inputs["password"].secret is True
+    assert flow.steps[0].target[0].css == "input[name=username]"
+    assert flow.steps[1].to == "accounts_overview"
+
+
+def test_load_flow_rejects_deferred_schema_keys(tmp_path):
+    path = write_recording(tmp_path, VALID_FLOW + "outputs: {}\n")
+
+    with pytest.raises(RecordingValidationError, match="outputs.*not supported in this version"):
+        load_flow(path)
+
+
+def test_load_flow_rejects_missing_step_target(tmp_path):
+    path = write_recording(
+        tmp_path,
+        VALID_FLOW.replace("    target: [{css: 'input[name=username]'}]\n", ""),
+    )
+
+    with pytest.raises(RecordingValidationError, match="target"):
+        load_flow(path)
+
+
+def test_load_flow_rejects_invalid_target_descriptor(tmp_path):
+    path = write_recording(tmp_path, VALID_FLOW.replace("{css: 'input[name=username]'}", "{text: username}"))
+
+    with pytest.raises(RecordingValidationError, match="one of role, css, xpath"):
+        load_flow(path)
+
+
+def test_load_flow_warns_for_credential_like_input_without_secret(tmp_path):
+    path = write_recording(tmp_path, VALID_FLOW.replace("secret: true", "secret: false", 1))
+
+    with pytest.warns(UserWarning, match="username.*secret"):
+        load_flow(path)

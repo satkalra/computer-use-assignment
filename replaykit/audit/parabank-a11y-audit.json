@@ -1,0 +1,10 @@
+{
+  "target": "http://localhost:9099/parabank",
+  "completed_at": "2026-09-16",
+  "findings": {
+    "form_controls": "ParaBank textboxes and comboboxes have no accessible names.",
+    "buttons": "Buttons generally have accessible names; Find Transactions has four identical names.",
+    "authenticated_ids": ["amount", "fromAccountId", "toAccountId", "findById", "findByDate", "findByDateRange", "findByAmount", "fromDate", "toDate"],
+    "login": "The login form name attributes are load-bearing classic POST fields."
+  }
+}
