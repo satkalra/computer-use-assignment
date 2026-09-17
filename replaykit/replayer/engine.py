@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from replaykit.locators.ladder import UnresolvableTarget, resolve
 from replaykit.recording.schema import Flow, Step
+from replaykit.replayer.extract import run_extractors, validate_outputs
 from replaykit.replayer.handoff import HandoffRecord, build_handoff
 from replaykit.replayer.recovery import recover
 from replaykit.states.predicate import wait_for
@@ -15,6 +16,7 @@ class ReplayResult:
     status: str
     step_index: int
     handoff: HandoffRecord | None = None
+    outputs: dict[str, str] | None = None
 
 
 def _interpolate(value: str, inputs: dict[str, str]) -> str:
@@ -130,4 +132,31 @@ class ReplayEngine:
                 )
             else:
                 raise AssertionError("unreachable retry loop")
-        return ReplayResult("success", len(flow.steps))
+        if not flow.extract:
+            return ReplayResult("success", len(flow.steps))
+        expected_state = flow.states[flow.steps[-1].to or flow.steps[-1].from_state]
+        try:
+            values = run_extractors(page, flow)
+        except Exception as exc:
+            return ReplayResult(
+                "handoff", len(flow.steps),
+                build_handoff(
+                    page, flow, step_index=len(flow.steps), expected_state=expected_state,
+                    inputs=inputs, ladder_outcomes=[],
+                    timings={"step_ms": 0, "total_ms": round((time.monotonic() - run_started) * 1000)},
+                    reason=f"extraction failed: {exc}",
+                ),
+            )
+        errors = validate_outputs(values, flow.outputs)
+        if errors:
+            return ReplayResult(
+                "handoff", len(flow.steps),
+                build_handoff(
+                    page, flow, step_index=len(flow.steps), expected_state=expected_state,
+                    inputs=inputs, ladder_outcomes=[],
+                    timings={"step_ms": 0, "total_ms": round((time.monotonic() - run_started) * 1000)},
+                    reason=f"output validation failed: {'; '.join(errors)}",
+                ),
+                outputs=values,
+            )
+        return ReplayResult("success", len(flow.steps), outputs=values)

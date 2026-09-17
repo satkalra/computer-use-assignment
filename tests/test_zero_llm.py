@@ -27,3 +27,12 @@ def test_replayer_never_imports_the_test_harness():
     imports = set().union(*(imported_modules(path) for path in (PACKAGE / "replayer").glob("*.py")))
 
     assert not any(module == "replaykit.harness" or module.startswith("replaykit.harness.") for module in imports)
+
+
+def test_the_recorder_receives_its_model_client_by_injection():
+    """The recorder can stay inside the package-wide no-SDK import guard."""
+    import inspect
+
+    from replaykit.recorder.session import record
+
+    assert "client" in inspect.signature(record).parameters

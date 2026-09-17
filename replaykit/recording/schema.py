@@ -34,6 +34,19 @@ class Step:
 
 
 @dataclass(frozen=True)
+class Output:
+    type: str
+
+
+@dataclass(frozen=True)
+class Extract:
+    from_state: str
+    target: list[Target]
+    parse: str | None = None
+    outputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Flow:
     name: str
     version: int
@@ -41,3 +54,5 @@ class Flow:
     states: dict[str, State]
     steps: list[Step]
     recovery: list[dict] = field(default_factory=list)
+    extract: list[Extract] = field(default_factory=list)
+    outputs: dict[str, Output] = field(default_factory=dict)
