@@ -26,9 +26,22 @@ def _observation(snapshot) -> str:
     return f"URL: {snapshot.url}\n\n{snapshot.text}"
 
 
+def _settle(page) -> None:
+    """Give async content (e.g. a table populated after navigation) a chance
+    to render before the next capture. A capture taken mid-render produces a
+    snapshot that's a strict subset of the same page settled -- undiscrimin-
+    able from its own later self -- confirmed live on ParaBank's account
+    overview page. Best-effort: some pages never go fully idle."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
+
+
 def _apply(page, action: str, payload: dict) -> None:
     if action == "goto":
         page.goto(payload["url"])
+        _settle(page)
         return
 
     locator = locator_for(page, payload["ref"])
@@ -38,6 +51,7 @@ def _apply(page, action: str, payload: dict) -> None:
         locator.fill(payload["value"])
     elif action == "select":
         locator.select_option(label=payload["value"])
+    _settle(page)
 
 
 def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int = 25) -> Trace:
