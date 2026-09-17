@@ -78,3 +78,28 @@ def test_compile_trace_strips_ai_mode_annotations_from_state_templates():
     for state in recording["states"].values():
         assert "[ref=" not in state["aria"]
         assert "[cursor=" not in state["aria"]
+
+
+def test_compile_trace_never_templates_a_line_ending_in_a_bare_colon():
+    """A line like '- link "about":' is a container whose nested /url: child
+    we don't carry over when flattening to one line. Standalone it's an
+    incomplete aria-snapshot fragment -- confirmed empirically that
+    to_match_aria_snapshot never matches it -- so it must never end up in a
+    compiled state template, even when discrimination would otherwise need
+    it (there must be a usable line further down that also discriminates)."""
+    trace = Trace(
+        spec=_spec(),
+        steps=[TraceStep(
+            action="click", ref="e39", role="button", name="Log In",
+            url_before="http://bank.example/index.htm",
+            url_after="http://bank.example/overview.htm",
+            snapshot_before='- link "about":\n- link "contact":\n- heading "Customer Login" [level=2]',
+            snapshot_after='- link "about":\n- link "contact":\n- heading "Accounts Overview" [level=2]',
+            targets=[Target(role="button", name="Log In")],
+        )],
+    )
+
+    recording = yaml.safe_load(compile_trace(object(), trace, {}))
+
+    for state in recording["states"].values():
+        assert not any(line.rstrip().endswith(":") for line in state["aria"].splitlines())

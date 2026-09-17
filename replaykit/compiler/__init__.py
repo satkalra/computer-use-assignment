@@ -10,18 +10,27 @@ def url_pattern(url: str) -> str:
     return re.escape("/" + path.rstrip("/").split("/")[-1])
 
 
+def _usable(line: str) -> bool:
+    """A line ending in a bare ':' is a container (e.g. a link with a nested
+    /url:) whose children we don't carry over when flattening to one line --
+    standalone it's an incomplete aria-snapshot fragment that never matches
+    to_match_aria_snapshot. Confirmed empirically against a live page."""
+    return not line.rstrip().endswith(":")
+
+
 def minimal_template(snapshot: str) -> str:
     """Prefer the first heading as the least brittle state predicate."""
-    for line in snapshot.splitlines():
-        if line.strip().startswith("- heading"):
-            return line.strip()
-    return next((line.strip() for line in snapshot.splitlines() if line.strip()), "")
+    lines = [line.strip() for line in snapshot.splitlines() if line.strip() and _usable(line.strip())]
+    for line in lines:
+        if line.startswith("- heading"):
+            return line
+    return lines[0] if lines else ""
 
 
 def widen_template(snapshot: str, others: list[str]) -> str:
     """Add snapshot lines until the predicate identifies exactly one state."""
     template = ""
-    for line in (line.strip() for line in snapshot.splitlines() if line.strip()):
+    for line in (line.strip() for line in snapshot.splitlines() if line.strip() and _usable(line.strip())):
         template = f"{template}\n{line}".strip()
         if discriminates(template, snapshot, others):
             return template
