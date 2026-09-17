@@ -19,6 +19,22 @@ def test_observed_states_collapses_repeated_visits_to_one_state():
     assert [s.url for s in states] == ["/login.htm", "/overview.htm"]
 
 
+def test_observed_states_collapses_visits_with_different_ai_mode_refs():
+    """ai-mode assigns a fresh ref to every element on every capture (e29,
+    f1e29, f2e29, ...), so two visits to the literal same page never match
+    on raw text. Identity has to ignore refs or every revisit looks new."""
+    steps = [
+        _step("/login.htm", "/login.htm",
+              "- heading \"Login\" [ref=e29]", "- heading \"Login\" [ref=f1e29]"),
+        _step("/login.htm", "/overview.htm",
+              "- heading \"Login\" [ref=f1e29]", "- heading \"Overview\" [ref=f2e10]"),
+    ]
+
+    states = observed_states(steps)
+
+    assert [s.url for s in states] == ["/login.htm", "/overview.htm"]
+
+
 def test_discriminates_rejects_a_template_matching_another_state():
     assert discriminates("- heading \"Overview\"", own="- heading \"Overview\"",
                          others=["- heading \"Login\""]) is True

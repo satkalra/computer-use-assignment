@@ -1,6 +1,18 @@
+import re
 from dataclasses import dataclass
 
 from replaykit.recording.schema import State
+
+# ai-mode snapshots annotate every element with [ref=e34] and clickable ones
+# with [cursor=pointer]. ref is reassigned on every capture, so two visits to
+# the literal same page never compare equal on the raw text -- state identity
+# has to be judged on content that's actually stable across visits.
+_AI_MODE_ANNOTATION = re.compile(r"\s*\[(?:ref|cursor)=[^\]]*\]")
+
+
+def clean(snapshot: str) -> str:
+    """Strip ai-mode-only annotations that aren't stable across snapshots."""
+    return "\n".join(_AI_MODE_ANNOTATION.sub("", line) for line in snapshot.splitlines())
 
 
 @dataclass(frozen=True)
@@ -10,13 +22,18 @@ class ObservedState:
 
 
 def observed_states(trace_steps) -> list[ObservedState]:
-    """Distinct (url, snapshot) pairs, in first-seen order."""
+    """Distinct (url, snapshot) pairs, in first-seen order.
+
+    Snapshots are compared after stripping ai-mode annotations, so two
+    visits to the same logical page collapse to one state even though
+    their raw ref numbers differ.
+    """
     seen: list[ObservedState] = []
     for step in trace_steps:
         for url, snapshot in ((step.url_before, step.snapshot_before), (step.url_after, step.snapshot_after)):
             if not url:
                 continue
-            candidate = ObservedState(url=url, snapshot=snapshot)
+            candidate = ObservedState(url=url, snapshot=clean(snapshot))
             if candidate not in seen:
                 seen.append(candidate)
     return seen
