@@ -55,3 +55,18 @@ def test_derive_only_returns_candidates_that_resolve_uniquely(page, pages_url):
 
     for candidate in derive(page, element.ref, element.role, element.name):
         assert build_locator(page, candidate).count() == 1
+
+
+def test_derive_rejects_unique_anchor_candidates_for_a_different_same_tag_sibling(page, pages_url):
+    page.goto(f"{pages_url}/sibling_anchor.html")
+    second_input = _ref_for(capture(page), "textbox", index=1)
+
+    from replaykit.locators.ladder import build_locator
+
+    candidates = derive(page, second_input.ref, second_input.role, second_input.name)
+
+    assert candidates
+    assert all(
+        build_locator(page, candidate).evaluate("element => element.id") == "second"
+        for candidate in candidates
+    )

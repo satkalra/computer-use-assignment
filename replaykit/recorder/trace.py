@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 from .spec import FlowSpec
+from replaykit.recording.schema import Target
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,10 @@ class TraceStep:
     url_after: str = ""
     snapshot_before: str = ""
     snapshot_after: str = ""
+    # Refs belong to a single accessibility snapshot. Keep the mechanically
+    # verified locator ladder while that snapshot is still live, rather than
+    # attempting to resolve the ref later during compilation.
+    targets: list[Target] = field(default_factory=list)
 
 
 @dataclass

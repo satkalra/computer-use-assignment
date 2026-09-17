@@ -1,4 +1,4 @@
-from replaykit.recording.schema import Flow, Input, State, Step, Target
+from replaykit.recording.schema import Extract, Flow, Input, Output, State, Step, Target
 from replaykit.locators.ladder import CandidateOutcome, UnresolvableTarget
 from replaykit.replayer.audit import JsonlAuditLog
 from replaykit.replayer.engine import ReplayEngine
@@ -151,3 +151,40 @@ def test_engine_retries_a_failed_postcondition_from_the_declared_from_state(monk
     assert result.status == "success"
     assert states_seen == ["login", "overview", "login", "overview"]
     assert locator.values == ["alice", "alice"]
+
+
+def test_engine_returns_validated_extractor_outputs(monkeypatch):
+    locator = Locator()
+    flow = login_flow()
+    flow = Flow(
+        flow.name, flow.version, flow.inputs, flow.states, flow.steps,
+        extract=[Extract("overview", [Target(css="#balance")], outputs=["balance"])],
+        outputs={"balance": Output("decimal")},
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (locator, 1))
+    monkeypatch.setattr("replaykit.replayer.engine.run_extractors", lambda *_args: {"balance": "$4.20"})
+
+    result = ReplayEngine().run(Page(), flow, {"username": "alice"})
+
+    assert result.status == "success"
+    assert result.outputs == {"balance": "$4.20"}
+
+
+def test_engine_handoffs_when_extracted_output_fails_validation(monkeypatch):
+    locator = Locator()
+    flow = login_flow()
+    flow = Flow(
+        flow.name, flow.version, flow.inputs, flow.states, flow.steps,
+        extract=[Extract("overview", [Target(css="#balance")], outputs=["balance"])],
+        outputs={"balance": Output("decimal")},
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (locator, 1))
+    monkeypatch.setattr("replaykit.replayer.engine.run_extractors", lambda *_args: {"balance": "nope"})
+
+    result = ReplayEngine().run(Page(), flow, {"username": "alice"})
+
+    assert result.status == "handoff"
+    assert result.outputs == {"balance": "nope"}
+    assert "output validation failed" in result.handoff.to_dict()["reason"]

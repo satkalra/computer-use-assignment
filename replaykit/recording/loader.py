@@ -3,15 +3,15 @@ import warnings
 
 import yaml
 
-from .schema import Flow, Input, State, Step, Target
+from .schema import Extract, Flow, Input, Output, State, Step, Target
 
 
 class RecordingValidationError(ValueError):
     """Raised when a recording is invalid for the supported format version."""
 
 
-SUPPORTED_KEYS = {"flow", "version", "inputs", "states", "steps", "recovery"}
-DEFERRED_KEYS = {"uses", "terminal_errors", "extract", "outputs"}
+SUPPORTED_KEYS = {"flow", "version", "inputs", "states", "steps", "recovery", "extract", "outputs"}
+DEFERRED_KEYS = {"uses", "terminal_errors"}
 TARGET_KEYS = {"role", "name", "css", "xpath", "within"}
 STEP_ACTIONS = {"fill", "click", "select"}
 CREDENTIAL_WORDS = ("password", "username", "credential", "secret", "token")
@@ -113,4 +113,38 @@ def load_flow(path: Path) -> Flow:
     recovery = data.get("recovery", [])
     if not isinstance(recovery, list):
         _fail("recovery must be a list")
-    return Flow(data["flow"], data["version"], inputs, states, steps, recovery)
+
+    outputs: dict[str, Output] = {}
+    for name, spec in _mapping(data.get("outputs", {}), "outputs").items():
+        spec = _mapping(spec, f"outputs.{name}")
+        if spec.get("type") not in {"string", "decimal", "integer"}:
+            _fail(f"outputs.{name}.type must be string, decimal or integer")
+        outputs[name] = Output(type=spec["type"])
+
+    extract: list[Extract] = []
+    raw_extract = data.get("extract", [])
+    if not isinstance(raw_extract, list):
+        _fail("extract must be a list")
+    for index, raw in enumerate(raw_extract):
+        entry = _mapping(raw, f"extract[{index}]")
+        for key in ("from", "target", "outputs"):
+            if key not in entry:
+                _fail(f"extract[{index}] is missing required key: {key}")
+        if entry["from"] not in states:
+            _fail(f"extract[{index}].from names an unknown state")
+        if not isinstance(entry["target"], list) or not entry["target"]:
+            _fail(f"extract[{index}].target must be a non-empty list")
+        if not isinstance(entry["outputs"], list) or not entry["outputs"]:
+            _fail(f"extract[{index}].outputs must be a non-empty list")
+        if entry.get("parse") is not None and not isinstance(entry["parse"], str):
+            _fail(f"extract[{index}].parse must be a string")
+        for name in entry["outputs"]:
+            if name not in outputs:
+                _fail(f"extract[{index}] produces undeclared output {name!r}")
+        extract.append(Extract(
+            from_state=entry["from"],
+            target=[_target(item, f"extract[{index}].target") for item in entry["target"]],
+            parse=entry.get("parse"), outputs=list(entry["outputs"]),
+        ))
+
+    return Flow(data["flow"], data["version"], inputs, states, steps, recovery, extract, outputs)

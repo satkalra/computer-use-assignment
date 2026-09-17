@@ -43,10 +43,29 @@ def test_load_flow_builds_typed_recording(tmp_path):
 
 
 def test_load_flow_rejects_deferred_schema_keys(tmp_path):
-    path = write_recording(tmp_path, VALID_FLOW + "outputs: {}\n")
+    path = write_recording(tmp_path, VALID_FLOW + "uses: [login]\n")
 
-    with pytest.raises(RecordingValidationError, match="outputs.*not supported in this version"):
+    with pytest.raises(RecordingValidationError, match="uses.*not supported in this version"):
         load_flow(path)
+
+
+def test_load_flow_parses_declared_extractors_and_outputs(tmp_path):
+    flow = load_flow(write_recording(
+        tmp_path,
+        VALID_FLOW + """
+outputs:
+  balance: {type: decimal}
+extract:
+  - from: accounts_overview
+    target: [{css: '#balance'}]
+    parse: 'Balance: (.+)'
+    outputs: [balance]
+""",
+    ))
+
+    assert flow.outputs["balance"].type == "decimal"
+    assert flow.extract[0].from_state == "accounts_overview"
+    assert flow.extract[0].target[0].css == "#balance"
 
 
 def test_load_flow_rejects_missing_step_target(tmp_path):

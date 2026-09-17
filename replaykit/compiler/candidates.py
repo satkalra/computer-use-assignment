@@ -33,11 +33,24 @@ _TAG_JS = "(el) => el.tagName.toLowerCase()"
 _ID_JS = "(el) => el.id || null"
 
 
-def _unique(page, target: Target) -> bool:
+def _matches_element(page, element, target: Target) -> bool:
     try:
-        return build_locator(page, target).count() == 1
+        candidate = build_locator(page, target)
+        if candidate.count() != 1:
+            return False
+        return candidate.evaluate(
+            "(resolved, expected) => resolved === expected", element.element_handle()
+        )
     except Exception:
         return False
+
+
+def _xpath_literal(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    return "concat(" + ", \"'\", ".join(f"'{part}'" for part in value.split("'")) + ")"
 
 
 def _anchor_targets(page, locator, tag: str) -> list[Target]:
@@ -46,12 +59,12 @@ def _anchor_targets(page, locator, tag: str) -> list[Target]:
     if not anchor:
         return []
     anchor = anchor.strip()[:40]
-    quoted = anchor.replace("'", "")
+    quoted = _xpath_literal(anchor)
     if kind == "text":
-        return [Target(xpath=f"//text()[contains(.,'{quoted}')]/following::{tag}[1]")]
+        return [Target(xpath=f"//text()[contains(.,{quoted})]/following::{tag}[1]")]
     if kind == "element":
-        return [Target(xpath=f"//{info['tag']}[contains(.,'{quoted}')]/following::{tag}[1]")]
-    return [Target(xpath=f"//{info['tag']}[contains(text(),'{quoted}')]//{tag}")]
+        return [Target(xpath=f"//{info['tag']}[contains(.,{quoted})]/following::{tag}[1]")]
+    return [Target(xpath=f"//{info['tag']}[contains(text(),{quoted})]//{tag}")]
 
 
 def derive(page, ref: str, role: str, name: str) -> list[Target]:
@@ -69,7 +82,7 @@ def derive(page, ref: str, role: str, name: str) -> list[Target]:
         ranked.append(Target(css=f"#{element_id}"))
     ranked.extend(_anchor_targets(page, locator, tag))
 
-    verified = [target for target in ranked if _unique(page, target)]
+    verified = [target for target in ranked if _matches_element(page, locator, target)]
     if not verified:
         raise ValueError(f"no unique locator could be derived for ref {ref} ({role} {name!r})")
     return verified

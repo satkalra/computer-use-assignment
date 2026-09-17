@@ -6,6 +6,9 @@ _ELEMENT = re.compile(
     r'^\s*-\s+(?P<role>[a-z]+)(?:\s+"(?P<name>[^"]*)")?.*?\[ref=(?P<ref>\w+)\]'
 )
 
+# Actions use interactive controls, but extraction must also address static
+# content (headings, cells, paragraphs). Every kept ref is therefore retained;
+# chrome is pruned before this point.
 _INTERACTIVE = {
     "textbox",
     "button",
@@ -70,8 +73,7 @@ def capture(page, prune: bool = True) -> Snapshot:
         if prune and not _keep(role, name):
             continue
         kept_lines.append(line)
-        if role in _INTERACTIVE:
-            elements[ref] = SnapshotElement(ref=ref, role=role, name=name)
+        elements[ref] = SnapshotElement(ref=ref, role=role, name=name)
     return Snapshot(text="\n".join(kept_lines), url=page.url, elements=elements)
 
 

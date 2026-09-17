@@ -30,6 +30,15 @@ def test_capture_records_the_page_url(page, pages_url):
     assert capture(page).url.endswith("/login.html")
 
 
+def test_capture_keeps_static_content_addressable_for_extraction(page, pages_url):
+    page.goto(f"{pages_url}/overview.html")
+
+    snapshot = capture(page)
+
+    assert any(element.role == "heading" and element.name == "Accounts Overview"
+               for element in snapshot.elements.values())
+
+
 def test_prune_drops_navigation_chrome(page, pages_url):
     page.goto(f"{pages_url}/chrome.html")
 
