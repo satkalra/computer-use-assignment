@@ -111,19 +111,24 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
             continue
 
         snapshot = capture(page)
-        trace.steps.append(TraceStep(
-            action=call.name,
-            ref=call.input.get("ref", ""),
-            role=element.role if element else "",
-            name=element.name if element else "",
-            value=call.input.get("value", ""),
-            output_name=call.input.get("output_name", ""),
-            url_before=url_before,
-            url_after=snapshot.url,
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot.text,
-            targets=targets,
-        ))
+        # goto has no locator candidates -- it isn't an action the Phase 1
+        # replayer supports -- so it's never recorded as a replayable step.
+        # The navigation itself already happened via _apply(); the model
+        # just sees the resulting snapshot like any other action.
+        if call.name != "goto":
+            trace.steps.append(TraceStep(
+                action=call.name,
+                ref=call.input.get("ref", ""),
+                role=element.role if element else "",
+                name=element.name if element else "",
+                value=call.input.get("value", ""),
+                output_name=call.input.get("output_name", ""),
+                url_before=url_before,
+                url_after=snapshot.url,
+                snapshot_before=snapshot_before,
+                snapshot_after=snapshot.text,
+                targets=targets,
+            ))
         messages.append({
             "role": "user",
             "content": [{
