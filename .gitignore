@@ -2,6 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 *_bakeoff
-bakeoff_tests/
 *.claude
 docs/
+*.env
