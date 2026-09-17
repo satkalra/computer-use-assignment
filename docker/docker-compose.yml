@@ -1,0 +1,13 @@
+services:
+  parabank:
+    image: parasoft/parabank
+    container_name: parabank
+    ports:
+      - "9099:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/parabank/index.htm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
