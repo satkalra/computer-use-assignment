@@ -67,6 +67,7 @@ def test_compile_trace_strips_ai_mode_annotations_from_state_templates():
             url_before="http://bank.example/index.htm",
             url_after="http://bank.example/overview.htm",
             snapshot_before='- heading "Customer Login" [level=2] [ref=e29]\n'
+                             '- textbox [active] [ref=e34]\n'
                              '- button "Log In" [ref=e39] [cursor=pointer]',
             snapshot_after='- heading "Accounts Overview" [level=2] [ref=f29]',
             targets=[Target(role="button", name="Log In")],
@@ -78,6 +79,7 @@ def test_compile_trace_strips_ai_mode_annotations_from_state_templates():
     for state in recording["states"].values():
         assert "[ref=" not in state["aria"]
         assert "[cursor=" not in state["aria"]
+        assert "[active]" not in state["aria"]
 
 
 def test_compile_trace_never_templates_a_line_ending_in_a_bare_colon():

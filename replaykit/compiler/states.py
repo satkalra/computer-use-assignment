@@ -4,14 +4,17 @@ from dataclasses import dataclass
 from replaykit.recording.schema import State
 
 # ai-mode snapshots annotate every element with [ref=e34] and clickable ones
-# with [cursor=pointer]. ref is reassigned on every capture, so two visits to
-# the literal same page never compare equal on the raw text -- state identity
-# has to be judged on content that's actually stable across visits.
-_AI_MODE_ANNOTATION = re.compile(r"\s*\[(?:ref|cursor)=[^\]]*\]")
+# with [cursor=pointer]; ref is reassigned on every capture, so two visits to
+# the literal same page never compare equal on the raw text. [active] marks
+# momentary focus -- real, but a snapshot of DOM state at one instant, not a
+# property of the page itself; confirmed live it can end up in a widened
+# template and then not hold on a fresh page load at replay time. None of
+# the three are a stable basis for state identity.
+_AI_MODE_ANNOTATION = re.compile(r"\s*\[(?:ref=[^\]]*|cursor=[^\]]*|active)\]")
 
 
 def clean(snapshot: str) -> str:
-    """Strip ai-mode-only annotations that aren't stable across snapshots."""
+    """Strip annotations that aren't stable across snapshots of the same page."""
     return "\n".join(_AI_MODE_ANNOTATION.sub("", line) for line in snapshot.splitlines())
 
 

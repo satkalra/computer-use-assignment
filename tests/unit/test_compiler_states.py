@@ -76,6 +76,19 @@ def test_anchor_skips_bare_colon_container_lines():
         == '- heading "Customer Login" [level=2]'
 
 
+def test_observed_states_strips_active_focus_markers():
+    """[active] reflects momentary DOM focus, not a durable property of the
+    page. Confirmed live: a widened template that includes it can fail to
+    match on a freshly loaded page at replay time, even though the page is
+    genuinely the same state."""
+    steps = [_step("/login.htm", "/login.htm",
+                    '- textbox [active]\n- heading "Login"', '- textbox [active]\n- heading "Login"')]
+
+    states = observed_states(steps)
+
+    assert "[active]" not in states[0].snapshot
+
+
 def test_discriminates_rejects_a_template_matching_another_state():
     assert discriminates("- heading \"Overview\"", own="- heading \"Overview\"",
                          others=["- heading \"Login\""]) is True
