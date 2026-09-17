@@ -58,6 +58,10 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
             model=MODEL,
             max_tokens=2048,
             tools=TOOLS,
+            # The loop only executes and replies to one tool_use block per turn;
+            # without this the model can emit two (e.g. alongside a thinking
+            # block) and the unanswered one 400s on the next request.
+            tool_choice={"type": "auto", "disable_parallel_tool_use": True},
             messages=messages,
         )
         trace.usage["input_tokens"] += response.usage.input_tokens
