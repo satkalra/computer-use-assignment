@@ -52,3 +52,29 @@ def test_compile_trace_promotes_captured_extract_target_to_top_level_block():
     assert recording["extract"] == [{
         "from": "state_1", "target": [{"css": "#balance"}], "outputs": ["balance"],
     }]
+
+
+def test_compile_trace_strips_ai_mode_annotations_from_state_templates():
+    """ai-mode snapshots annotate every element with [ref=..] and clickable
+    ones with [cursor=..]. Both are ephemeral/ai-mode-only -- Playwright's
+    to_match_aria_snapshot (what the replayer checks state predicates with)
+    doesn't recognise them, so a template built from raw lines can never
+    match a real page at replay time."""
+    trace = Trace(
+        spec=_spec(),
+        steps=[TraceStep(
+            action="click", ref="e39", role="button", name="Log In",
+            url_before="http://bank.example/index.htm",
+            url_after="http://bank.example/overview.htm",
+            snapshot_before='- heading "Customer Login" [level=2] [ref=e29]\n'
+                             '- button "Log In" [ref=e39] [cursor=pointer]',
+            snapshot_after='- heading "Accounts Overview" [level=2] [ref=f29]',
+            targets=[Target(role="button", name="Log In")],
+        )],
+    )
+
+    recording = yaml.safe_load(compile_trace(object(), trace, {}))
+
+    for state in recording["states"].values():
+        assert "[ref=" not in state["aria"]
+        assert "[cursor=" not in state["aria"]

@@ -3,6 +3,17 @@ import re
 from replaykit.compiler.emit import emit
 from replaykit.compiler.states import build_states, discriminates, observed_states
 
+# ai-mode snapshots annotate every element with [ref=e34] and clickable ones
+# with [cursor=pointer]. Both are ephemeral / ai-mode-only: Playwright's
+# to_match_aria_snapshot (what the replayer checks state predicates with)
+# doesn't recognise them, so a template built from raw ai-mode lines can
+# never match at replay time. Strip them before a line becomes a predicate.
+_AI_MODE_ANNOTATION = re.compile(r"\s*\[(?:ref|cursor)=[^\]]*\]")
+
+
+def _clean(snapshot: str) -> str:
+    return "\n".join(_AI_MODE_ANNOTATION.sub("", line) for line in snapshot.splitlines())
+
 
 def url_pattern(url: str) -> str:
     """Match the stable path; ParaBank appends a volatile session id to URLs."""
@@ -43,10 +54,11 @@ def compile_trace(page, trace, supplied_inputs: dict[str, str]) -> str:
     named: dict[str, tuple[str, str]] = {}
     state_names: dict[tuple[str, str], str] = {}
     for index, state in enumerate(observed, start=1):
-        others = [other.snapshot for other in observed if other != state]
-        template = minimal_template(state.snapshot)
-        if not discriminates(template, state.snapshot, others):
-            template = widen_template(state.snapshot, others)
+        own = _clean(state.snapshot)
+        others = [_clean(other.snapshot) for other in observed if other != state]
+        template = minimal_template(own)
+        if not discriminates(template, own, others):
+            template = widen_template(own, others)
         name = f"state_{index}"
         named[name] = (url_pattern(state.url), template)
         state_names[(state.url, state.snapshot)] = name
