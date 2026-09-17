@@ -15,28 +15,61 @@ def clean(snapshot: str) -> str:
     return "\n".join(_AI_MODE_ANNOTATION.sub("", line) for line in snapshot.splitlines())
 
 
+def _usable(line: str) -> bool:
+    """A line ending in a bare ':' is a container (e.g. a link with a nested
+    /url:, or a combobox with nested options) whose children aren't carried
+    along when the line is used alone -- standalone it's an incomplete
+    aria-snapshot fragment that never matches to_match_aria_snapshot, and
+    it's exactly the kind of content (a dropdown's current selection) most
+    likely to differ between two visits that are the same logical page."""
+    return not line.rstrip().endswith(":")
+
+
+def anchor(snapshot: str) -> str:
+    """A stable, low-noise fingerprint for 'this is conceptually the same
+    page'. Prefers the first heading (usually a page title) over exact full-
+    text equality, so two visits to the same logical page collapse to one
+    state even when they differ in ways that don't reflect a real distinct
+    page: a table still loading, which field has focus, a dropdown's
+    current selection. All three were confirmed live to otherwise fragment
+    one page into multiple undiscriminable "states"."""
+    lines = [line.strip() for line in snapshot.splitlines() if line.strip() and _usable(line.strip())]
+    for line in lines:
+        if line.startswith("- heading"):
+            return line
+    return lines[0] if lines else ""
+
+
 @dataclass(frozen=True)
 class ObservedState:
     url: str
     snapshot: str
+    anchor: str
 
 
 def observed_states(trace_steps) -> list[ObservedState]:
-    """Distinct (url, snapshot) pairs, in first-seen order.
+    """Distinct (url, anchor) identities, in first-seen order.
 
-    Snapshots are compared after stripping ai-mode annotations, so two
-    visits to the same logical page collapse to one state even though
-    their raw ref numbers differ.
+    Snapshots are cleaned of ai-mode annotations before anchoring. When the
+    same identity recurs with a longer snapshot (e.g. a table that has since
+    finished loading), the fuller snapshot replaces the shorter one, so the
+    template built from it isn't accidentally a subset of some later visit
+    to the very state it's supposed to represent.
     """
-    seen: list[ObservedState] = []
+    seen: dict[tuple[str, str], ObservedState] = {}
+    order: list[tuple[str, str]] = []
     for step in trace_steps:
         for url, snapshot in ((step.url_before, step.snapshot_before), (step.url_after, step.snapshot_after)):
             if not url:
                 continue
-            candidate = ObservedState(url=url, snapshot=clean(snapshot))
-            if candidate not in seen:
-                seen.append(candidate)
-    return seen
+            cleaned = clean(snapshot)
+            key = (url, anchor(cleaned))
+            if key not in seen:
+                seen[key] = ObservedState(url=url, snapshot=cleaned, anchor=key[1])
+                order.append(key)
+            elif len(cleaned) > len(seen[key].snapshot):
+                seen[key] = ObservedState(url=url, snapshot=cleaned, anchor=key[1])
+    return [seen[key] for key in order]
 
 
 def _template_lines(template: str) -> list[str]:

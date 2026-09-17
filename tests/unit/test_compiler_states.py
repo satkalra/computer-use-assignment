@@ -1,4 +1,4 @@
-from replaykit.compiler.states import ObservedState, build_states, discriminates, observed_states
+from replaykit.compiler.states import ObservedState, anchor, build_states, discriminates, observed_states
 from replaykit.recorder.trace import TraceStep
 
 
@@ -33,6 +33,47 @@ def test_observed_states_collapses_visits_with_different_ai_mode_refs():
     states = observed_states(steps)
 
     assert [s.url for s in states] == ["/login.htm", "/overview.htm"]
+
+
+def test_observed_states_keeps_the_fuller_snapshot_on_a_repeat_visit():
+    """Confirmed live: ParaBank's account table renders a moment after the
+    page loads, so an early capture is a strict subset of a later one on the
+    same page. If observed_states() kept the first (partial) capture, no
+    template built from it could ever discriminate against the fuller one."""
+    partial = '- heading "Accounts Overview"\n- table:\n  - row:\n    - cell "*note"'
+    full = ('- heading "Accounts Overview"\n- table:\n  - row:\n    - cell "12345"\n'
+            '    - cell "$10.00"\n  - row:\n    - cell "*note"')
+    steps = [
+        _step("/overview.htm", "/overview.htm", partial, full),
+    ]
+
+    states = observed_states(steps)
+
+    assert len(states) == 1
+    assert states[0].snapshot == full
+
+
+def test_observed_states_collapses_visits_that_differ_only_inside_a_container_line():
+    """A combobox's current selection lives inside its own nested container
+    line, which isn't part of the anchor. Two visits to the same form that
+    differ only in what's selected must still be one state."""
+    before = '- heading "Open New Account"\n- combobox:\n  - option "CHECKING"'
+    after = '- heading "Open New Account"\n- combobox:\n  - option "SAVINGS"'
+    steps = [_step("/openaccount.htm", "/openaccount.htm", before, after)]
+
+    states = observed_states(steps)
+
+    assert len(states) == 1
+
+
+def test_anchor_prefers_the_first_heading_over_other_content():
+    assert anchor('- paragraph: noise\n- heading "Accounts Overview"\n- button "Go"') \
+        == '- heading "Accounts Overview"'
+
+
+def test_anchor_skips_bare_colon_container_lines():
+    assert anchor('- link "about":\n- heading "Customer Login" [level=2]') \
+        == '- heading "Customer Login" [level=2]'
 
 
 def test_discriminates_rejects_a_template_matching_another_state():
