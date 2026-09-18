@@ -19,6 +19,17 @@ You see an accessibility snapshot. Every interactive element has a ref such as
 [ref=e34]. Address elements ONLY by ref -- many inputs on this site have no
 accessible name, so the surrounding text is your guide to what each one is.
 Refs change after every action; always use the refs from the latest snapshot.
+
+Every action you take becomes a permanent, literal replay step -- there is no
+"just looking" and nothing gets cleaned up afterward. So:
+- You are already on the starting page. Never call goto.
+- Fill in every required field a form needs BEFORE submitting it. Submitting
+  an empty or partial form is a real error on the live site, not a no-op.
+- Take the minimum number of actions that accomplish the goal. Don't click
+  something to inspect it, don't repeat an action that already succeeded,
+  don't explore alternate ways to do the same thing.
+- The moment every declared output is extracted and the goal is met, call
+  done immediately. Do not take further actions first.
 """
 
 
