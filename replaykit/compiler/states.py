@@ -30,16 +30,28 @@ def _usable(line: str) -> bool:
 
 def anchor(snapshot: str) -> str:
     """A stable, low-noise fingerprint for 'this is conceptually the same
-    page'. Prefers the first heading (usually a page title) over exact full-
-    text equality, so two visits to the same logical page collapse to one
-    state even when they differ in ways that don't reflect a real distinct
-    page: a table still loading, which field has focus, a dropdown's
-    current selection. All three were confirmed live to otherwise fragment
-    one page into multiple undiscriminable "states"."""
+    page'. Prefers a level-1 heading (a page's own content title) over exact
+    full-text equality, so two visits to the same logical page collapse to
+    one state even when they differ in ways that don't reflect a real
+    distinct page: a table still loading, which field has focus, a
+    dropdown's current selection. All three were confirmed live to
+    otherwise fragment one page into multiple undiscriminable "states".
+
+    Level matters: ParaBank's left-nav "Account Services" [level=2] heading
+    precedes the page's own [level=1] title in document order on every
+    authenticated page. Preferring the first heading regardless of level
+    picks that shared nav heading -- identical across every page -- so a
+    same-URL page that swaps its own content in place (a transfer form
+    replaced by "Transfer Complete!") wrongly collapses to one state.
+    Confirmed live: this is exactly what broke transfer_funds and
+    open_account, both of which submit a form in place on the same URL."""
     lines = [line.strip() for line in snapshot.splitlines() if line.strip() and _usable(line.strip())]
-    for line in lines:
-        if line.startswith("- heading"):
+    headings = [line for line in lines if line.startswith("- heading")]
+    for line in headings:
+        if "[level=1]" in line:
             return line
+    if headings:
+        return headings[0]
     return lines[0] if lines else ""
 
 

@@ -71,6 +71,31 @@ def test_anchor_prefers_the_first_heading_over_other_content():
         == '- heading "Accounts Overview"'
 
 
+def test_anchor_prefers_a_level_1_heading_over_a_shared_nav_heading():
+    """ParaBank's left-nav 'Account Services' [level=2] heading precedes the
+    page's own [level=1] title in every authenticated page's document order.
+    Confirmed live: preferring the first heading regardless of level picked
+    that shared nav heading -- identical on every page -- so a form and its
+    own in-place confirmation (same URL, ParaBank swaps content without
+    navigating) wrongly anchored to the same identity, corrupting the
+    precondition for every step recorded against the form."""
+    form = '- heading "Account Services" [level=2]\n- heading "Transfer Funds" [level=1]'
+    confirmation = '- heading "Account Services" [level=2]\n- heading "Transfer Complete!" [level=1]'
+
+    assert anchor(form) == '- heading "Transfer Funds" [level=1]'
+    assert anchor(confirmation) == '- heading "Transfer Complete!" [level=1]'
+
+
+def test_observed_states_keeps_a_form_and_its_own_confirmation_distinct():
+    form = '- heading "Account Services" [level=2]\n- heading "Transfer Funds" [level=1]'
+    confirmation = '- heading "Account Services" [level=2]\n- heading "Transfer Complete!" [level=1]'
+    steps = [_step("/transfer.htm", "/transfer.htm", form, confirmation)]
+
+    states = observed_states(steps)
+
+    assert len(states) == 2
+
+
 def test_anchor_skips_bare_colon_container_lines():
     assert anchor('- link "about":\n- heading "Customer Login" [level=2]') \
         == '- heading "Customer Login" [level=2]'
