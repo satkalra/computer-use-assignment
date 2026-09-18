@@ -42,11 +42,19 @@ def _settle(page) -> None:
     to render before the next capture. A capture taken mid-render produces a
     snapshot that's a strict subset of the same page settled -- undiscrimin-
     able from its own later self -- confirmed live on ParaBank's account
-    overview page. Best-effort: some pages never go fully idle."""
+    overview page. Best-effort: some pages never go fully idle.
+
+    networkidle alone isn't enough: confirmed live and reproduced directly
+    that ParaBank's transfer confirmation content can still be missing from
+    an aria snapshot taken immediately after networkidle resolves, and
+    present a moment later with no further network activity in between --
+    the render itself, not a pending request, is what's still catching up.
+    """
     try:
         page.wait_for_load_state("networkidle", timeout=5000)
     except Exception:
         pass
+    page.wait_for_timeout(300)
 
 
 def _apply(page, action: str, payload: dict) -> None:
