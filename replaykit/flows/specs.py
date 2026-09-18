@@ -12,9 +12,15 @@ CREDENTIAL = {
 
 
 def _fresh_user() -> dict[str, str]:
-    """Provide a seeded account before each destructive promotion replay."""
+    """Provide a seeded account before each destructive promotion replay.
+
+    run_gate() uses this return value as the *entire* inputs dict for a
+    replay -- it doesn't merge it with anything else -- so every input a
+    reset-hooked flow declares has to come from here, not just the
+    credentials. TRANSFER_FUNDS declares "amount" too.
+    """
     credentials = seed_users(BASE_URL, count=30)[-1]
-    return {"username": credentials.username, "password": credentials.password}
+    return {"username": credentials.username, "password": credentials.password, "amount": "1.00"}
 
 
 ACCOUNTS_OVERVIEW = FlowSpec(
