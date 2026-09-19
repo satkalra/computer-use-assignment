@@ -57,6 +57,28 @@ def test_derive_only_returns_candidates_that_resolve_uniquely(page, pages_url):
         assert build_locator(page, candidate).count() == 1
 
 
+def test_derive_locates_a_table_cell_positionally_not_by_its_own_dynamic_text(page, pages_url):
+    """A balance cell's role+name candidate IS the balance ('-$87.50') and the
+    nearest text to anchor on is the account number link -- both are the
+    discovery user's own data, not stable across other users at replay time.
+    Confirmed live: extraction failed for every replay user because neither
+    candidate resolved against their different account numbers/balances."""
+    page.goto(f"{pages_url}/datatable.html")
+    snapshot = capture(page)
+    balance_cell = next(
+        e for e in snapshot.elements.values() if e.role == "cell" and e.name == "-$87.50"
+    )
+
+    candidates = derive(page, balance_cell.ref, balance_cell.role, balance_cell.name)
+
+    assert any(c.css and "accountTable" in c.css for c in candidates)
+    assert not any(c.role == "cell" and c.name == "-$87.50" for c in candidates)
+    assert not any(c.xpath and "14676" in c.xpath for c in candidates)
+    from replaykit.locators.ladder import build_locator
+    positional = next(c for c in candidates if c.css and "accountTable" in c.css)
+    assert build_locator(page, positional).inner_text() == "-$87.50"
+
+
 def test_derive_rejects_unique_anchor_candidates_for_a_different_same_tag_sibling(page, pages_url):
     page.goto(f"{pages_url}/sibling_anchor.html")
     second_input = _ref_for(capture(page), "textbox", index=1)

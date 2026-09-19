@@ -19,6 +19,17 @@ You see an accessibility snapshot. Every interactive element has a ref such as
 [ref=e34]. Address elements ONLY by ref -- many inputs on this site have no
 accessible name, so the surrounding text is your guide to what each one is.
 Refs change after every action; always use the refs from the latest snapshot.
+
+Every action you take becomes a permanent, literal replay step -- there is no
+"just looking" and nothing gets cleaned up afterward. So:
+- You are already on the starting page. Never call goto.
+- Fill in every required field a form needs BEFORE submitting it. Submitting
+  an empty or partial form is a real error on the live site, not a no-op.
+- Take the minimum number of actions that accomplish the goal. Don't click
+  something to inspect it, don't repeat an action that already succeeded,
+  don't explore alternate ways to do the same thing.
+- The moment every declared output is extracted and the goal is met, call
+  done immediately. Do not take further actions first.
 """
 
 
@@ -26,9 +37,30 @@ def _observation(snapshot) -> str:
     return f"URL: {snapshot.url}\n\n{snapshot.text}"
 
 
+def _settle(page) -> None:
+    """Give async content (e.g. a table populated after navigation) a chance
+    to render before the next capture. A capture taken mid-render produces a
+    snapshot that's a strict subset of the same page settled -- undiscrimin-
+    able from its own later self -- confirmed live on ParaBank's account
+    overview page. Best-effort: some pages never go fully idle.
+
+    networkidle alone isn't enough: confirmed live and reproduced directly
+    that ParaBank's transfer confirmation content can still be missing from
+    an aria snapshot taken immediately after networkidle resolves, and
+    present a moment later with no further network activity in between --
+    the render itself, not a pending request, is what's still catching up.
+    """
+    try:
+        page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
+    page.wait_for_timeout(300)
+
+
 def _apply(page, action: str, payload: dict) -> None:
     if action == "goto":
         page.goto(payload["url"])
+        _settle(page)
         return
 
     locator = locator_for(page, payload["ref"])
@@ -38,6 +70,7 @@ def _apply(page, action: str, payload: dict) -> None:
         locator.fill(payload["value"])
     elif action == "select":
         locator.select_option(label=payload["value"])
+    _settle(page)
 
 
 def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int = 25) -> Trace:
@@ -111,19 +144,24 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
             continue
 
         snapshot = capture(page)
-        trace.steps.append(TraceStep(
-            action=call.name,
-            ref=call.input.get("ref", ""),
-            role=element.role if element else "",
-            name=element.name if element else "",
-            value=call.input.get("value", ""),
-            output_name=call.input.get("output_name", ""),
-            url_before=url_before,
-            url_after=snapshot.url,
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot.text,
-            targets=targets,
-        ))
+        # goto has no locator candidates -- it isn't an action the Phase 1
+        # replayer supports -- so it's never recorded as a replayable step.
+        # The navigation itself already happened via _apply(); the model
+        # just sees the resulting snapshot like any other action.
+        if call.name != "goto":
+            trace.steps.append(TraceStep(
+                action=call.name,
+                ref=call.input.get("ref", ""),
+                role=element.role if element else "",
+                name=element.name if element else "",
+                value=call.input.get("value", ""),
+                output_name=call.input.get("output_name", ""),
+                url_before=url_before,
+                url_after=snapshot.url,
+                snapshot_before=snapshot_before,
+                snapshot_after=snapshot.text,
+                targets=targets,
+            ))
         messages.append({
             "role": "user",
             "content": [{

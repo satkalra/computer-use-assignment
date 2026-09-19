@@ -1,0 +1,43 @@
+flow: accounts_overview
+version: 1
+inputs:
+  username:
+    type: string
+    secret: true
+  password:
+    type: string
+    secret: true
+states:
+  state_1:
+    url: /index\.htm
+    aria: '- heading "Customer Login" [level=2]'
+  state_2:
+    url: /overview\.htm
+    aria: '- heading "Accounts Overview" [level=1]'
+steps:
+- from: state_1
+  action: fill
+  target:
+  - css: '#loginPanel form:nth-of-type(1) > div:nth-of-type(1) > input:nth-of-type(1)'
+  value: '{{inputs.username}}'
+- from: state_1
+  action: fill
+  target:
+  - css: '#loginPanel form:nth-of-type(1) > div:nth-of-type(2) > input:nth-of-type(1)'
+  value: '{{inputs.password}}'
+- from: state_1
+  action: click
+  target:
+  - role: button
+    name: Log In
+  - css: '#loginPanel form:nth-of-type(1) > div:nth-of-type(3) > input:nth-of-type(1)'
+  to: state_2
+outputs:
+  balance:
+    type: decimal
+extract:
+- from: state_2
+  target:
+  - css: '#accountTable tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2)'
+  outputs:
+  - balance
