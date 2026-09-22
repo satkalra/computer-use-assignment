@@ -1,0 +1,8 @@
+{
+  "status": "business_outcome",
+  "outputs": {
+    "message": "The username and password could not be verified."
+  },
+  "outcome": "invalid_credentials",
+  "handoff": null
+}

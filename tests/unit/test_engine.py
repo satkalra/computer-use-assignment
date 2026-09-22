@@ -1,7 +1,8 @@
-from replaykit.recording.schema import Extract, Flow, Input, Output, State, Step, Target
+from replaykit.recording.schema import Extract, Flow, Input, Outcome, Output, State, Step, Target
 from replaykit.locators.ladder import CandidateOutcome, UnresolvableTarget
+from replaykit.policy.policy import Policy
 from replaykit.replayer.audit import JsonlAuditLog
-from replaykit.replayer.engine import ReplayEngine
+from replaykit.replayer.engine import ReplayEngine, find_resume_index
 from replaykit.replayer.recovery import RecoveryResult
 
 
@@ -188,3 +189,127 @@ def test_engine_handoffs_when_extracted_output_fails_validation(monkeypatch):
     assert result.status == "handoff"
     assert result.outputs == {"balance": "nope"}
     assert "output validation failed" in result.handoff.to_dict()["reason"]
+
+
+def test_engine_reports_a_declared_business_outcome_instead_of_a_handoff(monkeypatch):
+    locator = Locator()
+    flow = login_flow()
+    no_results = State("no_results_page", r"/login\\.htm", "- heading No results")
+    flow = Flow(
+        flow.name, flow.version, flow.inputs,
+        {**flow.states, "no_results_page": no_results}, flow.steps,
+        outcomes={"no_results": Outcome(state="no_results_page")},
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *args: args[1].name == "login")
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (locator, 1))
+    monkeypatch.setattr("replaykit.replayer.engine.matches", lambda _page, state: state.name == "no_results_page")
+
+    result = ReplayEngine().run(Page(), flow, {"username": "alice"})
+
+    assert result.status == "business_outcome"
+    assert result.outcome == "no_results"
+
+
+def test_engine_returns_needs_approval_for_an_unapproved_risky_step(monkeypatch):
+    risky_flow = Flow(
+        "transfer", 1, {},
+        {"start": State("start", r"/transfer\\.htm", "- heading")},
+        [Step("start", "click", [Target(role="button", name="Transfer Funds")])],
+    )
+    policy = Policy(["http://bank.example"], {"click"}, ["(?i)transfer"])
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (Locator(), 1))
+
+    result = ReplayEngine(policy=policy).run(Page(), risky_flow, {})
+
+    assert result.status == "needs_approval"
+    assert result.step_index == 0
+    assert "requires approval" in result.approval_reason
+
+
+def test_engine_allows_a_pre_approved_risky_step(monkeypatch):
+    locator = Locator()
+    risky_flow = Flow(
+        "transfer", 1, {},
+        {"start": State("start", r"/transfer\\.htm", "- heading")},
+        [Step("start", "click", [Target(role="button", name="Transfer Funds")])],
+    )
+    policy = Policy(["http://bank.example"], {"click"}, ["(?i)transfer"])
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (locator, 1))
+
+    result = ReplayEngine(policy=policy, approved={0}).run(Page(), risky_flow, {})
+
+    assert result.status == "success"
+    assert locator.clicks == 1
+
+
+def test_engine_requires_approval_for_a_css_only_click(monkeypatch):
+    flow = Flow(
+        "transfer", 1, {},
+        {"start": State("start", r"/transfer\\.htm", "- heading")},
+        [Step("start", "click", [Target(css="button.btn-primary")])],
+    )
+    policy = Policy(["http://bank.example"], {"click"}, ["(?i)transfer"])
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (Locator(), 1))
+
+    result = ReplayEngine(policy=policy).run(Page(), flow, {})
+
+    assert result.status == "needs_approval"
+
+
+def test_engine_run_can_start_from_a_later_step_index(monkeypatch):
+    locator = Locator()
+    flow = Flow(
+        "two_steps", 1, {"username": Input("string")},
+        {"login": State("login", r"/login\\.htm", "- heading Login")},
+        [
+            Step("login", "fill", [Target(css="#username")], "{{inputs.username}}"),
+            Step("login", "click", [Target(role="button", name="Continue")]),
+        ],
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (locator, 1))
+
+    result = ReplayEngine().run(Page(), flow, {"username": "alice"}, start_index=1)
+
+    assert result.status == "success"
+    assert result.step_index == 2
+    assert locator.values == []
+    assert locator.clicks == 1
+
+
+def test_find_resume_index_returns_the_first_matching_step(monkeypatch):
+    flow = Flow(
+        "two_steps", 1, {},
+        {
+            "login": State("login", r"/login\\.htm", "- heading Login"),
+            "overview": State("overview", r"/overview\\.htm", "- heading Overview"),
+        },
+        [
+            Step("login", "click", [Target(role="button", name="Continue")], to="overview"),
+            Step("overview", "click", [Target(role="button", name="Finish")]),
+        ],
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.matches", lambda _page, state: state.name == "overview")
+
+    assert find_resume_index(Page(), flow) == 1
+
+
+def test_find_resume_index_does_not_jump_back_to_an_earlier_step_sharing_the_same_state(monkeypatch):
+    """Three fields on one login page all declare `from: login`, exactly like
+    accounts_overview_live.yaml. Getting stuck on the third step (still on the
+    login page) must resume there, not replay the first field again."""
+    flow = Flow(
+        "login_form", 1, {},
+        {"login": State("login", r"/login\\.htm", "- heading Login")},
+        [
+            Step("login", "fill", [Target(css="#username")], value="alice"),
+            Step("login", "fill", [Target(css="#password")], value="secret"),
+            Step("login", "click", [Target(role="button", name="Log In")]),
+        ],
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.matches", lambda _page, state: state.name == "login")
+
+    assert find_resume_index(Page(), flow, min_index=2) == 2

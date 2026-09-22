@@ -4,11 +4,12 @@ import time
 from dataclasses import dataclass
 
 from replaykit.locators.ladder import UnresolvableTarget, resolve
-from replaykit.recording.schema import Flow, Step
+from replaykit.policy.policy import ApprovalRequired, Policy, check
+from replaykit.recording.schema import Flow, Outcome, Step
 from replaykit.replayer.extract import run_extractors, validate_outputs
 from replaykit.replayer.handoff import HandoffRecord, build_handoff
 from replaykit.replayer.recovery import recover
-from replaykit.states.predicate import wait_for
+from replaykit.states.predicate import matches, wait_for
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,8 @@ class ReplayResult:
     step_index: int
     handoff: HandoffRecord | None = None
     outputs: dict[str, str] | None = None
+    outcome: str | None = None
+    approval_reason: str | None = None
 
 
 def _interpolate(value: str, inputs: dict[str, str]) -> str:
@@ -46,9 +49,43 @@ def _outcomes(error: Exception) -> list[dict]:
     ]
 
 
+def _match_declared_outcome(page, flow: Flow) -> tuple[str, Outcome] | None:
+    for name, outcome in flow.outcomes.items():
+        if matches(page, flow.states[outcome.state]):
+            return name, outcome
+    return None
+
+
+def _extract_outcome_fields(page, outcome: Outcome) -> dict[str, str]:
+    values = {}
+    for field_name, field in outcome.extract.items():
+        locator, _rung = resolve(page, [field.target])
+        values[field_name] = locator.inner_text().strip()
+    return values
+
+
+def _describe_target(step: Step) -> str:
+    target = step.target[0]
+    return target.name or ""
+
+
+def find_resume_index(page, flow: Flow, min_index: int = 0) -> int:
+    # Searching from 0 would return the *first* step whose state matches --
+    # wrong whenever multiple steps share a state (e.g. several fields on one
+    # login page), since that's always the earliest, already-completed one.
+    # min_index pins the search to "at or after where we got stuck," so resume
+    # never re-executes a step that already ran once.
+    for index, step in enumerate(flow.steps[min_index:], start=min_index):
+        if matches(page, flow.states[step.from_state]):
+            return index
+    return min_index
+
+
 class ReplayEngine:
-    def __init__(self, audit_log=None):
+    def __init__(self, audit_log=None, policy: Policy | None = None, approved: set[int] = frozenset()):
         self.audit_log = audit_log
+        self.policy = policy
+        self.approved = approved
 
     def _audit(self, *, step_index: int, rung: int | None, page, started: float, outcome: str) -> None:
         if self.audit_log is not None:
@@ -57,8 +94,13 @@ class ReplayEngine:
                 duration_ms=round((time.monotonic() - started) * 1000), outcome=outcome,
             )
 
-    @staticmethod
-    def _act(locator, step: Step, inputs: dict[str, str]) -> None:
+    def _act(self, page, locator, step: Step, inputs: dict[str, str], step_index: int) -> None:
+        if self.policy is not None:
+            check(
+                self.policy, url=page.url, action=step.action,
+                target_name=_describe_target(step), approved=self.approved,
+                step_index=step_index,
+            )
         if step.action == "click":
             locator.click()
         elif step.action == "fill":
@@ -68,9 +110,9 @@ class ReplayEngine:
         else:
             raise ValueError(f"unsupported action {step.action!r}")
 
-    def run(self, page, flow: Flow, inputs: dict[str, str]) -> ReplayResult:
+    def run(self, page, flow: Flow, inputs: dict[str, str], start_index: int = 0) -> ReplayResult:
         run_started = time.monotonic()
-        for index, step in enumerate(flow.steps):
+        for index, step in enumerate(flow.steps[start_index:], start=start_index):
             step_started = time.monotonic()
             from_state = flow.states[step.from_state]
             handoff_state = from_state
@@ -84,7 +126,13 @@ class ReplayEngine:
                 else:
                     try:
                         locator, rung = resolve(page, step.target)
-                        self._act(locator, step, inputs)
+                        self._act(page, locator, step, inputs, index)
+                    except ApprovalRequired as exc:
+                        self._audit(
+                            step_index=index, rung=rung, page=page,
+                            started=step_started, outcome="needs_approval",
+                        )
+                        return ReplayResult("needs_approval", index, approval_reason=str(exc))
                     except Exception as exc:
                         reason = f"action or target failed: {exc}"
                         ladder_outcomes = _outcomes(exc)
@@ -101,6 +149,14 @@ class ReplayEngine:
                     if step.to is None or wait_for(page, flow.states[step.to], step.timeout_ms):
                         self._audit(step_index=index, rung=rung, page=page, started=step_started, outcome="success")
                         break
+                    matched = _match_declared_outcome(page, flow)
+                    if matched is not None:
+                        outcome_name, outcome = matched
+                        self._audit(step_index=index, rung=rung, page=page, started=step_started, outcome="business_outcome")
+                        return ReplayResult(
+                            "business_outcome", index, outcome=outcome_name,
+                            outputs=_extract_outcome_fields(page, outcome),
+                        )
                     handoff_state = flow.states[step.to]
                     reason = "postcondition failed"
                 if attempt == 0:

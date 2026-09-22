@@ -1,5 +1,0 @@
-flask
-playwright
-anthropic
-pytest
-PyYAML

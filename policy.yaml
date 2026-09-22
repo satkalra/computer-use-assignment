@@ -1,0 +1,3 @@
+allowed_origins: ["http://localhost:9099"]
+allowed_actions: [click, fill, select, goto, extract]
+risky_patterns: ["(?i)transfer", "(?i)open.*account", "(?i)delete"]
