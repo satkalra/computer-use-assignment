@@ -3,14 +3,14 @@ import warnings
 
 import yaml
 
-from .schema import Extract, Flow, Input, Output, State, Step, Target
+from .schema import Extract, Flow, Input, Outcome, OutcomeField, Output, State, Step, Target
 
 
 class RecordingValidationError(ValueError):
     """Raised when a recording is invalid for the supported format version."""
 
 
-SUPPORTED_KEYS = {"flow", "version", "inputs", "states", "steps", "recovery", "extract", "outputs"}
+SUPPORTED_KEYS = {"flow", "version", "inputs", "states", "steps", "recovery", "extract", "outputs", "outcomes"}
 DEFERRED_KEYS = {"uses", "terminal_errors"}
 TARGET_KEYS = {"role", "name", "css", "xpath", "within"}
 STEP_ACTIONS = {"fill", "click", "select"}
@@ -147,4 +147,24 @@ def load_flow(path: Path) -> Flow:
             parse=entry.get("parse"), outputs=list(entry["outputs"]),
         ))
 
-    return Flow(data["flow"], data["version"], inputs, states, steps, recovery, extract, outputs)
+    outcomes: dict[str, Outcome] = {}
+    for name, spec in _mapping(data.get("outcomes", {}), "outcomes").items():
+        spec = _mapping(spec, f"outcomes.{name}")
+        if "state" not in spec:
+            _fail(f"outcomes.{name} is missing required key: state")
+        if spec["state"] not in states:
+            _fail(f"outcomes.{name}.state names an unknown state")
+        extract_fields: dict[str, OutcomeField] = {}
+        for field_name, field_spec in _mapping(spec.get("extract", {}), f"outcomes.{name}.extract").items():
+            field_spec = _mapping(field_spec, f"outcomes.{name}.extract.{field_name}")
+            field_type = field_spec.get("type")
+            if field_type not in {"string", "decimal", "integer"}:
+                _fail(f"outcomes.{name}.extract.{field_name}.type must be string, decimal or integer")
+            target_data = {key: value for key, value in field_spec.items() if key != "type"}
+            extract_fields[field_name] = OutcomeField(
+                target=_target(target_data, f"outcomes.{name}.extract.{field_name}"),
+                type=field_type,
+            )
+        outcomes[name] = Outcome(state=spec["state"], extract=extract_fields)
+
+    return Flow(data["flow"], data["version"], inputs, states, steps, recovery, extract, outputs, outcomes)

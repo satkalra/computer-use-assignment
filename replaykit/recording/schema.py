@@ -47,6 +47,18 @@ class Extract:
 
 
 @dataclass(frozen=True)
+class OutcomeField:
+    target: Target
+    type: str
+
+
+@dataclass(frozen=True)
+class Outcome:
+    state: str
+    extract: dict[str, OutcomeField] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Flow:
     name: str
     version: int
@@ -56,3 +68,4 @@ class Flow:
     recovery: list[dict] = field(default_factory=list)
     extract: list[Extract] = field(default_factory=list)
     outputs: dict[str, Output] = field(default_factory=dict)
+    outcomes: dict[str, Outcome] = field(default_factory=dict)

@@ -68,6 +68,34 @@ extract:
     assert flow.extract[0].target[0].css == "#balance"
 
 
+def test_load_flow_parses_declared_outcomes(tmp_path):
+    flow = load_flow(write_recording(
+        tmp_path,
+        VALID_FLOW + """
+outcomes:
+  no_results:
+    state: login_page
+    extract:
+      message: {css: '.error', type: string}
+""",
+    ))
+
+    outcome = flow.outcomes["no_results"]
+    assert outcome.state == "login_page"
+    assert outcome.extract["message"].type == "string"
+    assert outcome.extract["message"].target.css == ".error"
+
+
+def test_load_flow_rejects_outcome_naming_unknown_state(tmp_path):
+    path = write_recording(
+        tmp_path,
+        VALID_FLOW + "outcomes:\n  no_results:\n    state: not_a_state\n",
+    )
+
+    with pytest.raises(RecordingValidationError, match="outcomes.no_results.state names an unknown state"):
+        load_flow(path)
+
+
 def test_load_flow_rejects_missing_step_target(tmp_path):
     path = write_recording(
         tmp_path,

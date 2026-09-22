@@ -43,3 +43,23 @@ def test_handoff_contains_expected_state_runtime_evidence_and_redacted_inputs():
     assert data["actual_url"].endswith("index.htm")
     assert data["screenshot_base64"] == "cG5nLWJ5dGVz"
     assert data["inputs"]["password"] == "[REDACTED]"
+
+
+def test_handoff_redacts_a_filled_secret_out_of_the_live_aria_snapshot_too(page, pages_url):
+    """redact_inputs() only scrubs the recorded `inputs` dict -- the page's own
+    accessibility snapshot repeats a filled secret verbatim (Playwright doesn't
+    mask type=password values in an aria snapshot), so build_handoff must
+    redact that text too or the same secret leaks a second way."""
+    page.goto(f"{pages_url}/login.html")
+    page.fill("#password", "hunter2-secret")
+
+    flow = Flow(
+        "login", 1, {"password": Input("string", secret=True)},
+        {"login_page": State("login_page", "/login", "- heading")}, [],
+    )
+    record = build_handoff(
+        page, flow, step_index=0, expected_state=flow.states["login_page"],
+        inputs={"password": "hunter2-secret"}, ladder_outcomes=[], timings={}, reason="stuck",
+    )
+
+    assert "hunter2-secret" not in (record.actual_aria_snapshot or "")

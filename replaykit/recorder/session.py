@@ -1,4 +1,11 @@
-from .snapshot import capture, locator_for
+import json
+import re
+from pathlib import Path
+
+from replaykit.control import await_approval
+from replaykit.policy.policy import ApprovalRequired, Policy, PolicyViolation, check
+
+from .snapshot import Snapshot, capture, locator_for
 from .spec import FlowSpec
 from .tools import TOOLS
 from .trace import Trace, TraceStep
@@ -10,7 +17,7 @@ _PROMPT = """You are recording a browser flow so it can be replayed later withou
 
 Goal: {goal}
 
-Inputs available to you (use these exact values):
+Inputs available to you (use these placeholders):
 {inputs}
 
 Outputs you must extract before calling done: {outputs}
@@ -30,6 +37,7 @@ Every action you take becomes a permanent, literal replay step -- there is no
   don't explore alternate ways to do the same thing.
 - The moment every declared output is extracted and the goal is met, call
   done immediately. Do not take further actions first.
+- Before each tool call, say in one short sentence why you are taking it.
 """
 
 
@@ -57,7 +65,12 @@ def _settle(page) -> None:
     page.wait_for_timeout(300)
 
 
-def _apply(page, action: str, payload: dict) -> None:
+def _resolve_placeholder(value: str, inputs: dict[str, str]) -> str:
+    match = re.fullmatch(r"\{\{inputs\.([A-Za-z_][A-Za-z0-9_]*)\}\}", value)
+    return inputs[match.group(1)] if match else value
+
+
+def _apply(page, action: str, payload: dict, inputs: dict[str, str]) -> None:
     if action == "goto":
         page.goto(payload["url"])
         _settle(page)
@@ -67,26 +80,72 @@ def _apply(page, action: str, payload: dict) -> None:
     if action == "click":
         locator.click()
     elif action == "fill":
-        locator.fill(payload["value"])
+        locator.fill(_resolve_placeholder(payload["value"], inputs))
     elif action == "select":
-        locator.select_option(label=payload["value"])
+        locator.select_option(label=_resolve_placeholder(payload["value"], inputs))
     _settle(page)
 
 
-def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int = 25) -> Trace:
+def _redact_snapshot(snapshot: Snapshot, secret_values: list[str]) -> Snapshot:
+    # A filled secret sits in the DOM as soon as _apply() runs, so the very next
+    # capture -- headed straight back to the model as the tool_result -- would
+    # otherwise undo the placeholder prompt entirely and land the raw value in
+    # the trace this snapshot gets stored into.
+    text = snapshot.text
+    for value in secret_values:
+        if value:
+            text = text.replace(value, "[REDACTED]")
+    return Snapshot(text=text, url=snapshot.url, elements=snapshot.elements)
+
+
+def _write_policy_violation(evidence_dir: Path, *, url: str, action: str, reason: str) -> None:
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "policy_violation.json").write_text(
+        json.dumps({"url": url, "action": action, "reason": reason}, indent=2)
+    )
+
+
+def _log_turn(
+    evidence_dir: Path, entry: dict, secret_values: list[str],
+) -> None:
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    def redact_recursively(obj):
+        if isinstance(obj, dict):
+            return {k: redact_recursively(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [redact_recursively(item) for item in obj]
+        elif isinstance(obj, str):
+            result = obj
+            for value in secret_values:
+                if value:
+                    result = result.replace(value, "[REDACTED]")
+            return result
+        else:
+            return obj
+
+    with (evidence_dir / "log.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(redact_recursively(entry)) + "\n")
+
+
+def record(
+    page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int = 25, *,
+    policy: Policy | None = None, control=None, evidence_dir: Path | None = None,
+) -> Trace:
     """Drive an injected model client over the page and record its tool actions."""
     trace = Trace(spec=spec)
-    rendered_inputs = "\n".join(f"  {name}: {value}" for name, value in inputs.items())
+    secret_values = [inputs[name] for name in spec.secret_inputs() if name in inputs]
+    rendered_inputs = "\n".join(f"  {name}: {{{{inputs.{name}}}}}" for name in inputs)
     prompt = _PROMPT.format(
         goal=spec.goal,
         inputs=rendered_inputs,
         outputs=", ".join(spec.outputs) or "(none)",
     )
 
-    snapshot = capture(page)
+    snapshot = _redact_snapshot(capture(page), secret_values)
     messages = [{"role": "user", "content": f"{prompt}\n\n{_observation(snapshot)}"}]
 
-    for _ in range(max_steps):
+    for turn_num in range(1, max_steps + 1):
         response = client.messages.create(
             model=MODEL,
             max_tokens=2048,
@@ -101,15 +160,46 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
         trace.usage["output_tokens"] += response.usage.output_tokens
         messages.append({"role": "assistant", "content": response.content})
 
+        reasoning = " ".join(
+            getattr(b, "text", "") for b in response.content
+            if getattr(b, "type", "") == "text"
+        ).strip()
+
         call = next(
             (block for block in response.content if getattr(block, "type", "") == "tool_use"),
             None,
         )
         if call is None:
+            if evidence_dir is not None:
+                _log_turn(
+                    evidence_dir,
+                    {
+                        "turn": turn_num,
+                        "reasoning": reasoning,
+                        "tool": None,
+                        "input": None,
+                        "url": snapshot.url,
+                        "outcome": "no tool call",
+                    },
+                    secret_values,
+                )
             break
         if call.name == "done":
             trace.status = "success"
             trace.outputs.update(call.input.get("outputs") or {})
+            if evidence_dir is not None:
+                _log_turn(
+                    evidence_dir,
+                    {
+                        "turn": turn_num,
+                        "reasoning": reasoning,
+                        "tool": call.name,
+                        "input": call.input,
+                        "url": snapshot.url,
+                        "outcome": "done",
+                    },
+                    secret_values,
+                )
             break
 
         url_before, snapshot_before = snapshot.url, snapshot.text
@@ -125,13 +215,53 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
                 from replaykit.compiler.candidates import derive
 
                 targets = derive(page, element.ref, element.role, element.name)
+            if policy is not None and call.name in {"click", "fill", "select", "goto"}:
+                # A goto's destination is where the action lands, not where it starts --
+                # checking snapshot.url here would let a disallowed navigation happen
+                # first and only get caught on the step after it.
+                check_url = call.input.get("url", snapshot.url) if call.name == "goto" else snapshot.url
+                try:
+                    check(
+                        policy, url=check_url, action=call.name,
+                        target_name=element.name if element else "",
+                    )
+                except PolicyViolation as exc:
+                    _write_policy_violation(
+                        evidence_dir or Path("evidence/_discovery_pending"),
+                        url=check_url, action=call.name, reason=str(exc),
+                    )
+                    raise RuntimeError(f"policy blocked: {exc}") from exc
+                except ApprovalRequired as exc:
+                    if control is None:
+                        raise RuntimeError(f"discovery stopped: {exc}") from exc
+                    approved = await_approval(
+                        page, spec.secret_inputs(), str(exc), control,
+                        evidence_dir or Path("evidence/_discovery_pending"),
+                    )
+                    if not approved:
+                        raise RuntimeError(f"discovery stopped: {exc}") from exc
             if call.name == "extract":
                 text = locator_for(page, call.input["ref"]).inner_text()
                 trace.outputs[call.input["output_name"]] = text.strip()
             else:
-                _apply(page, call.name, call.input)
+                _apply(page, call.name, call.input, inputs)
+        except RuntimeError:
+            raise
         except Exception as exc:
-            snapshot = capture(page)
+            snapshot = _redact_snapshot(capture(page), secret_values)
+            if evidence_dir is not None:
+                _log_turn(
+                    evidence_dir,
+                    {
+                        "turn": turn_num,
+                        "reasoning": reasoning,
+                        "tool": call.name,
+                        "input": call.input,
+                        "url": snapshot.url,
+                        "outcome": f"error: {exc}",
+                    },
+                    secret_values,
+                )
             messages.append({
                 "role": "user",
                 "content": [{
@@ -143,7 +273,7 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
             })
             continue
 
-        snapshot = capture(page)
+        snapshot = _redact_snapshot(capture(page), secret_values)
         # goto has no locator candidates -- it isn't an action the Phase 1
         # replayer supports -- so it's never recorded as a replayable step.
         # The navigation itself already happened via _apply(); the model
@@ -162,6 +292,19 @@ def record(page, spec: FlowSpec, inputs: dict[str, str], client, max_steps: int 
                 snapshot_after=snapshot.text,
                 targets=targets,
             ))
+        if evidence_dir is not None:
+            _log_turn(
+                evidence_dir,
+                {
+                    "turn": turn_num,
+                    "reasoning": reasoning,
+                    "tool": call.name,
+                    "input": call.input,
+                    "url": url_before,
+                    "outcome": "ok",
+                },
+                secret_values,
+            )
         messages.append({
             "role": "user",
             "content": [{
