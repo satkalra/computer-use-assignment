@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 
 from replaykit.locators.ladder import UnresolvableTarget, resolve
-from replaykit.policy.policy import ApprovalRequired, Policy, check
+from replaykit.policy.policy import ApprovalRequired, Policy, PolicyViolation, check
 from replaykit.recording.schema import Flow, Outcome, Step
 from replaykit.replayer.extract import run_extractors, validate_outputs
 from replaykit.replayer.handoff import HandoffRecord, build_handoff
@@ -25,6 +25,8 @@ class ReplayResult:
 def _interpolate(value: str, inputs: dict[str, str]) -> str:
     match = re.fullmatch(r"\{\{inputs\.([A-Za-z_][A-Za-z0-9_]*)\}\}", value)
     if match is None:
+        if "{{inputs." in value:
+            raise ValueError(f"unsupported partial placeholder in {value!r}; a value must be exactly {{{{inputs.NAME}}}}")
         return value
     name = match.group(1)
     if name not in inputs:
@@ -82,10 +84,10 @@ def find_resume_index(page, flow: Flow, min_index: int = 0) -> int:
 
 
 class ReplayEngine:
-    def __init__(self, audit_log=None, policy: Policy | None = None, approved: set[int] = frozenset()):
+    def __init__(self, audit_log=None, policy: Policy | None = None, approved: set[int] | None = None):
         self.audit_log = audit_log
         self.policy = policy
-        self.approved = approved
+        self.approved = set() if approved is None else approved
 
     def _audit(self, *, step_index: int, rung: int | None, page, started: float, outcome: str) -> None:
         if self.audit_log is not None:
@@ -133,6 +135,20 @@ class ReplayEngine:
                             started=step_started, outcome="needs_approval",
                         )
                         return ReplayResult("needs_approval", index, approval_reason=str(exc))
+                    except PolicyViolation as exc:
+                        # A hard stop, not a handoff: there's no live-page fix for an
+                        # operator to make and resume from, so this must not be offered
+                        # as resumable the way a locator/postcondition failure is.
+                        self._audit(step_index=index, rung=rung, page=page, started=step_started, outcome="failed")
+                        return ReplayResult(
+                            "failed", index,
+                            build_handoff(
+                                page, flow, step_index=index, expected_state=from_state, inputs=inputs,
+                                ladder_outcomes=[],
+                                timings={"step_ms": round((time.monotonic() - step_started) * 1000), "total_ms": round((time.monotonic() - run_started) * 1000)},
+                                reason=f"policy violation: {exc}",
+                            ),
+                        )
                     except Exception as exc:
                         reason = f"action or target failed: {exc}"
                         ladder_outcomes = _outcomes(exc)
@@ -186,8 +202,6 @@ class ReplayEngine:
                         reason=reason,
                     ),
                 )
-            else:
-                raise AssertionError("unreachable retry loop")
         if not flow.extract:
             return ReplayResult("success", len(flow.steps))
         expected_state = flow.states[flow.steps[-1].to or flow.steps[-1].from_state]

@@ -169,6 +169,82 @@ steps:
     assert engine.approvals_seen == [set(), {0}]
 
 
+def test_run_replay_does_not_offer_resume_after_a_policy_violation(monkeypatch, tmp_path):
+    """status='failed' (e.g. a PolicyViolation) is a hard stop -- unlike 'handoff', there's
+    no live-page fix an operator can make, so intervene() must never be offered for it."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "policy.yaml").write_text(
+        "allowed_origins: ['http://bank.example']\nallowed_actions: [click]\n"
+    )
+    flow_path = tmp_path / "login.yaml"
+    flow_path.write_text("""
+flow: login
+version: 1
+inputs: {}
+states:
+  start: {url: /start, aria: '- heading'}
+steps:
+  - from: start
+    action: click
+    target: [{role: button, name: Go}]
+""")
+
+    class Result:
+        status = "failed"
+        outputs = None
+        outcome = None
+        handoff = None
+        step_index = 0
+        approval_reason = None
+
+    class Page:
+        url = "http://bank.example/start"
+
+        def goto(self, _url):
+            pass
+
+        def screenshot(self):
+            return b"x"
+
+    class Browser:
+        def new_page(self):
+            return Page()
+
+        def close(self):
+            pass
+
+    class PlaywrightContext:
+        def __enter__(self):
+            chromium = type("Chromium", (), {"launch": staticmethod(lambda headless=True: Browser())})
+            return type("PW", (), {"chromium": chromium})()
+
+        def __exit__(self, *exc):
+            return False
+
+    intervene_call_count = [0]
+    monkeypatch.setattr("replaykit.cli.sync_playwright", lambda: PlaywrightContext())
+    monkeypatch.setattr(
+        "replaykit.cli.ReplayEngine",
+        lambda *_a, **_kw: type("E", (), {"run": staticmethod(lambda *a, **kw: Result())})(),
+    )
+
+    def fake_intervene(*_args):
+        intervene_call_count[0] += 1
+        return True
+
+    monkeypatch.setattr("replaykit.cli.intervene", fake_intervene)
+    monkeypatch.setattr("replaykit.cli.find_resume_index", lambda *_args, **_kwargs: 0)
+
+    parser = argparse.ArgumentParser()
+    build_replay_parser(parser)
+    args = parser.parse_args([str(flow_path), "--target", "http://bank.example/start"])
+
+    exit_code = run_replay(args, control=object())
+
+    assert intervene_call_count[0] == 0
+    assert exit_code == 1
+
+
 _CANDIDATE_YAML = """
 flow: login
 version: 1

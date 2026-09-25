@@ -119,7 +119,12 @@ def run_replay(args, control: ControlState | None) -> int:
             start_index = 0
             while True:
                 result = engine.run(page, flow, inputs, start_index=start_index)
-                if result.status not in {"handoff", "failed", "needs_approval"}:
+                if result.status == "failed":
+                    # A hard stop (e.g. a policy violation): no live-page fix exists for an
+                    # operator to make and resume from, so unlike "handoff" this is never
+                    # offered as resumable.
+                    break
+                if result.status not in {"handoff", "needs_approval"}:
                     break
                 reason = result.approval_reason or (result.handoff.reason if result.handoff else "unknown")
                 request = InterventionRequest(

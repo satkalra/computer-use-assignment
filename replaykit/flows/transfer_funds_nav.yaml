@@ -1,0 +1,47 @@
+flow: transfer_funds_nav
+version: 1
+inputs:
+  username: {type: string, secret: true}
+  password: {type: string, secret: true}
+states:
+  login_page:
+    url: /parabank/index\.htm
+    aria: |
+      - heading "Customer Login"
+      - button "Log In"
+  accounts_overview:
+    url: /parabank/overview\.htm
+    aria: |
+      - heading "Accounts Overview"
+  transfer_page:
+    url: /parabank/transfer\.htm
+    aria: |
+      - heading "Transfer Funds" [level=1]
+steps:
+  - from: login_page
+    action: fill
+    target:
+      - {css: "input[name=username]"}
+      - {xpath: "//p[b='Username']/following::input[1]"}
+    value: "{{inputs.username}}"
+  - from: login_page
+    action: fill
+    target:
+      - {css: "input[name=password]"}
+      - {xpath: "//p[b='Password']/following::input[1]"}
+    value: "{{inputs.password}}"
+  - from: login_page
+    action: click
+    target:
+      - {role: button, name: "Log In"}
+    to: accounts_overview
+  - from: accounts_overview
+    action: click
+    target:
+      - {role: link, name: "Transfer Funds"}
+    to: transfer_page
+recovery:
+  - when: {aria: "- dialog"}
+    do: [{action: click, target: [{role: button, name: "/close|dismiss|ok/i"}]}]
+  - when: {state: login_page}
+    do: [{handoff: session_expired}]

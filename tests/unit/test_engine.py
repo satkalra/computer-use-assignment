@@ -57,6 +57,28 @@ def test_engine_performs_interpolated_action_and_audits_rung(monkeypatch, tmp_pa
     assert '"rung": 2' in (tmp_path / "run.jsonl").read_text()
 
 
+def test_engine_handoffs_instead_of_silently_passing_through_an_unmatched_placeholder(monkeypatch):
+    """A value like 'Amt: {{inputs.x}}' isn't a supported partial-interpolation syntax --
+    _interpolate's regex only handles a value that IS the placeholder, in full. Silently
+    filling that literal string into a bank form field would be worse than a visible,
+    inspectable handoff, so an unresolved '{{inputs.' must fail the step, not pass through."""
+    locator = Locator()
+    base = login_flow()
+    flow = Flow(
+        base.name, base.version, base.inputs, base.states,
+        [Step("login", "fill", [Target(css="#username")], "Amt: {{inputs.username}}", "overview")],
+    )
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (locator, 1))
+    monkeypatch.setattr("replaykit.replayer.engine.recover", lambda *_args: RecoveryResult())
+
+    result = ReplayEngine().run(Page(), flow, {"username": "alice"})
+
+    assert result.status == "handoff"
+    assert "{{inputs." in result.handoff.to_dict()["reason"]
+    assert locator.values == []
+
+
 def test_engine_recovers_then_retries_a_failed_state_once(monkeypatch):
     locator = Locator()
     attempts = iter([False, True, True])
@@ -210,6 +232,17 @@ def test_engine_reports_a_declared_business_outcome_instead_of_a_handoff(monkeyp
     assert result.outcome == "no_results"
 
 
+def test_engine_default_approved_set_is_mutable():
+    """cli.py does `engine.approved.add(step_index)` after an operator approves a risky
+    step; a caller that doesn't pass its own `approved` set relies on the default being a
+    real, mutable set(), not an immutable frozenset() that .add() would blow up on."""
+    engine = ReplayEngine()
+
+    engine.approved.add(0)
+
+    assert engine.approved == {0}
+
+
 def test_engine_returns_needs_approval_for_an_unapproved_risky_step(monkeypatch):
     risky_flow = Flow(
         "transfer", 1, {},
@@ -242,6 +275,27 @@ def test_engine_allows_a_pre_approved_risky_step(monkeypatch):
 
     assert result.status == "success"
     assert locator.clicks == 1
+
+
+def test_engine_fails_hard_on_a_policy_violation_instead_of_offering_a_resumable_handoff(monkeypatch):
+    """PolicyViolation (disallowed origin/action) is a hard stop per policy.py's own
+    docstring -- unlike a locator/postcondition failure, there's no live-page state an
+    operator can fix and resume from. It must not come back as a resumable 'handoff'."""
+    flow = Flow(
+        "transfer", 1, {},
+        {"start": State("start", r"/transfer\\.htm", "- heading")},
+        [Step("start", "click", [Target(role="button", name="Delete Account")])],
+    )
+    policy = Policy(["http://bank.example"], {"fill"}, [])  # click not in allowed_actions
+    recover_calls = []
+    monkeypatch.setattr("replaykit.replayer.engine.wait_for", lambda *_args: True)
+    monkeypatch.setattr("replaykit.replayer.engine.resolve", lambda *_args: (Locator(), 1))
+    monkeypatch.setattr("replaykit.replayer.engine.recover", lambda *_args: recover_calls.append(1))
+
+    result = ReplayEngine(policy=policy).run(Page(), flow, {})
+
+    assert result.status == "failed"
+    assert recover_calls == []
 
 
 def test_engine_requires_approval_for_a_css_only_click(monkeypatch):
