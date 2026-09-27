@@ -59,6 +59,16 @@ uv run pytest -q -m slow
 The live suite includes a 100-run replay of the hand-written login flow and
 end-to-end recording, compilation, and promotion tests for the example flows.
 
+Three of those end-to-end cases currently fail, and the reason is the known
+`select` limitation listed under "Current limits" below: `find_transactions`,
+`transfer_funds`, and `open_account` all select an account from a dropdown
+ParaBank populates per user. Discovery records the account belonging to the
+user it discovered with, while the promotion gate replays against other freshly
+seeded users whose dropdowns hold different accounts, so `select_option` finds
+no matching option and the gate refuses the recording. `accounts_overview`,
+which selects nothing, passes. Fixing this needs a positional fallback for
+`select` values, which the compiler's locator ladder does not yet derive.
+
 ## Demo path
 
 Replay the hand-written login flow without an LLM or API key:
@@ -206,7 +216,8 @@ zero-LLM test also scans the replaykit package for model-SDK imports.
   are not supported.
 - Select values that are not declared inputs can remain tied to the account
   chosen during discovery. Locator targets have positional fallbacks; select
-  values do not yet.
+  values do not yet. This is what fails the three end-to-end promotion cases
+  noted under "Tests" above.
 - A flow that mutates bank state needs a reset hook before promotion replays.
 - The local operator dashboard shares the same process and browser session as
   the run. It is not a remote, authenticated operator console.
